@@ -7,7 +7,7 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# 小米MiMo API配置
+# API配置
 client = OpenAI(
     api_key=os.getenv("MIMO_API_KEY", "your-api-key-here"),
     base_url=os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
@@ -30,7 +30,7 @@ def chat():
     if not user_message:
         return jsonify({"error": "消息不能为空"}), 400
 
-    messages = [{"role": "system", "content": "你是小米MiMo大模型AI助手，擅长推理、数学和代码任务。请用中文回答用户的问题。"}]
+    messages = [{"role": "system", "content": "你是一个智能AI助手，擅长推理、数学和代码任务。请用中文回答用户的问题。"}]
     messages.extend(history)
     messages.append({"role": "user", "content": user_message})
 
