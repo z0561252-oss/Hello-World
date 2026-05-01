@@ -14,3 +14,12 @@ build/
 *.egg
 .mypy_cache/
 .pytest_cache/
+.coverage
+htmlcov/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
