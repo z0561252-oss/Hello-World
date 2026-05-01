@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小米MiMo AI助手</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .container {
+            width: 100%;
+            max-width: 800px;
+            height: 90vh;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(90deg, #ff6900, #ff9500);
+            color: white;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .header h1 { font-size: 18px; font-weight: 600; }
+        .header .badge {
+            background: rgba(255,255,255,0.2);
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+        }
+        .chat-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .message {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            line-height: 1.6;
+            font-size: 14px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .message.user {
+            align-self: flex-end;
+            background: #667eea;
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+        .message.assistant {
+            align-self: flex-start;
+            background: #f0f0f0;
+            color: #333;
+            border-bottom-left-radius: 4px;
+        }
+        .message.system {
+            align-self: center;
+            background: #fff3cd;
+            color: #856404;
+            font-size: 12px;
+            max-width: 90%;
+            text-align: center;
+        }
+        .message.error {
+            align-self: center;
+            background: #f8d7da;
+            color: #721c24;
+            font-size: 12px;
+        }
+        .input-area {
+            padding: 16px 20px;
+            border-top: 1px solid #eee;
+            display: flex;
+            gap: 12px;
+            background: #fafafa;
+        }
+        .input-area textarea {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            resize: none;
+            font-size: 14px;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .input-area textarea:focus { border-color: #667eea; }
+        .input-area button {
+            padding: 12px 24px;
+            background: linear-gradient(90deg, #ff6900, #ff9500);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: opacity 0.2s;
+        }
+        .input-area button:hover { opacity: 0.9; }
+        .input-area button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .typing-indicator {
+            display: none;
+            align-self: flex-start;
+            padding: 12px 16px;
+            background: #f0f0f0;
+            border-radius: 12px;
+            border-bottom-left-radius: 4px;
+        }
+        .typing-indicator span {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: #999;
+            border-radius: 50%;
+            margin: 0 2px;
+            animation: bounce 1.4s infinite ease-in-out;
+        }
+        .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
+        .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+        .token-info {
+            font-size: 11px;
+            color: #999;
+            text-align: right;
+            padding: 4px 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>小米MiMo AI助手</h1>
+            <span class="badge" id="model-badge">MiMo</span>
+        </div>
+        <div class="chat-area" id="chatArea">
+            <div class="message system">
+                欢迎使用小米MiMo大模型AI助手！我可以帮你进行推理、数学计算和代码编写。
+            </div>
+        </div>
+        <div class="token-info" id="tokenInfo"></div>
+        <div class="input-area">
+            <textarea id="userInput" rows="2" placeholder="输入你的问题..." onkeydown="handleKeyDown(event)"></textarea>
+            <button id="sendBtn" onclick="sendMessage()">发送</button>
+        </div>
+    </div>
+
+    <script>
+        const chatHistory = [];
+        let isProcessing = false;
+
+        function handleKeyDown(e) {
+            if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        }
+
+        function addMessage(content, role) {
+            const chatArea = document.getElementById("chatArea");
+            const div = document.createElement("div");
+            div.className = `message ${role}`;
+            div.textContent = content;
+            chatArea.appendChild(div);
+            chatArea.scrollTop = chatArea.scrollHeight;
+            return div;
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById("userInput");
+            const message = input.value.trim();
+            if (!message || isProcessing) return;
+
+            isProcessing = true;
+            document.getElementById("sendBtn").disabled = true;
+            input.value = "";
+
+            addMessage(message, "user");
+            chatHistory.push({ role: "user", content: message });
+
+            const typing = document.createElement("div");
+            typing.className = "typing-indicator";
+            typing.innerHTML = "<span></span><span></span><span></span>";
+            typing.style.display = "flex";
+            document.getElementById("chatArea").appendChild(typing);
+
+            try {
+                const res = await fetch("/api/chat", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ message, history: chatHistory.slice(0, -1) })
+                });
+
+                const data = await res.json();
+                typing.remove();
+
+                if (data.error) {
+                    addMessage("错误: " + data.error, "error");
+                } else {
+                    addMessage(data.response, "assistant");
+                    chatHistory.push({ role: "assistant", content: data.response });
+                    if (data.usage) {
+                        document.getElementById("tokenInfo").textContent =
+                            `Token用量: ${data.usage.total_tokens} (提示: ${data.usage.prompt_tokens}, 生成: ${data.usage.completion_tokens})`;
+                    }
+                    if (data.model) {
+                        document.getElementById("model-badge").textContent = data.model;
+                    }
+                }
+            } catch (err) {
+                typing.remove();
+                addMessage("请求失败: " + err.message, "error");
+            }
+
+            isProcessing = false;
+            document.getElementById("sendBtn").disabled = false;
+            input.focus();
+        }
+    </script>
+</body>
+</html>
