@@ -2,6 +2,7 @@ import os
 import json
 import time
 import uuid
+import secrets
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, Response, session
 from openai import OpenAI
@@ -10,16 +11,31 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "mimo-chat-secret-key")
 
-# API配置
+# 安全配置：启动时验证必要配置
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY or SECRET_KEY == "change-this-to-a-random-string":
+    SECRET_KEY = secrets.token_hex(32)
+    print("WARNING: SECRET_KEY not set, using auto-generated key. Set SECRET_KEY in .env for production.")
+app.secret_key = SECRET_KEY
+
+# API配置：启动时验证
+MIMO_API_KEY = os.getenv("MIMO_API_KEY")
+MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
+if not MIMO_API_KEY or MIMO_API_KEY == "your-api-key-here":
+    print("WARNING: MIMO_API_KEY not set. API calls will fail. Set MIMO_API_KEY in .env.")
+
 client = OpenAI(
-    api_key=os.getenv("MIMO_API_KEY", "your-api-key-here"),
-    base_url=os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
+    api_key=MIMO_API_KEY or "not-set",
+    base_url=MIMO_BASE_URL
 )
 
+# 启动时加载配置（避免每次请求重复读取环境变量）
 MODEL_NAME = os.getenv("MIMO_MODEL", "MiMo-7B-RL")
+TEMPERATURE = float(os.getenv("TEMPERATURE", "0.7"))
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", "2048"))
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "20"))
+SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "你是一个智能AI助手，擅长推理、数学和代码任务。请用中文回答用户的问题。回答要简洁明了，逻辑清晰。")
 
 # 内存中的对话存储（生产环境应使用数据库）
 conversations = {}
@@ -35,11 +51,15 @@ def index():
 @app.route("/api/chat", methods=["POST"])
 def chat():
     data = request.get_json()
-    user_message = data.get("message", "")
+    user_message = data.get("message", "").strip()
     conversation_id = data.get("conversation_id", session.get("session_id", "default"))
 
     if not user_message:
         return jsonify({"error": "消息不能为空"}), 400
+
+    # 输入长度限制
+    if len(user_message) > 10000:
+        return jsonify({"error": "消息过长，最多10000字符"}), 400
 
     # 获取或创建对话历史
     if conversation_id not in conversations:
@@ -47,7 +67,7 @@ def chat():
 
     history = conversations[conversation_id]
 
-    messages = [{"role": "system", "content": get_system_prompt()}]
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history[-MAX_HISTORY:])
     messages.append({"role": "user", "content": user_message})
 
@@ -56,8 +76,8 @@ def chat():
         response = client.chat.completions.create(
             model=MODEL_NAME,
             messages=messages,
-            temperature=float(os.getenv("TEMPERATURE", "0.7")),
-            max_tokens=int(os.getenv("MAX_TOKENS", "2048")),
+            temperature=TEMPERATURE,
+            max_tokens=MAX_TOKENS,
             stream=False
         )
         elapsed = time.time() - start_time
@@ -89,43 +109,49 @@ def chat():
 @app.route("/api/chat/stream", methods=["POST"])
 def chat_stream():
     data = request.get_json()
-    user_message = data.get("message", "")
+    user_message = data.get("message", "").strip()
     conversation_id = data.get("conversation_id", session.get("session_id", "default"))
 
     if not user_message:
         return jsonify({"error": "消息不能为空"}), 400
+
+    if len(user_message) > 10000:
+        return jsonify({"error": "消息过长，最多10000字符"}), 400
 
     if conversation_id not in conversations:
         conversations[conversation_id] = []
 
     history = conversations[conversation_id]
 
-    messages = [{"role": "system", "content": get_system_prompt()}]
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history[-MAX_HISTORY:])
     messages.append({"role": "user", "content": user_message})
 
     def generate():
         full_response = ""
+        start_time = time.time()
         try:
             stream = client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=messages,
-                temperature=float(os.getenv("TEMPERATURE", "0.7")),
-                max_tokens=int(os.getenv("MAX_TOKENS", "2048")),
+                temperature=TEMPERATURE,
+                max_tokens=MAX_TOKENS,
                 stream=True
             )
 
             for chunk in stream:
-                if chunk.choices[0].delta.content:
+                if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     full_response += content
                     yield f"data: {json.dumps({'content': content, 'done': False})}\n\n"
+
+            elapsed = time.time() - start_time
 
             # 保存对话历史
             history.append({"role": "user", "content": user_message})
             history.append({"role": "assistant", "content": full_response})
 
-            yield f"data: {json.dumps({'content': '', 'done': True, 'conversation_id': conversation_id})}\n\n"
+            yield f"data: {json.dumps({'content': '', 'done': True, 'conversation_id': conversation_id, 'elapsed': round(elapsed, 2)})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
 
@@ -174,17 +200,13 @@ def list_models():
 def get_config():
     return jsonify({
         "model": MODEL_NAME,
-        "temperature": float(os.getenv("TEMPERATURE", "0.7")),
-        "max_tokens": int(os.getenv("MAX_TOKENS", "2048")),
+        "temperature": TEMPERATURE,
+        "max_tokens": MAX_TOKENS,
         "max_history": MAX_HISTORY
     })
 
 
-def get_system_prompt():
-    return os.getenv("SYSTEM_PROMPT", "你是一个智能AI助手，擅长推理、数学和代码任务。请用中文回答用户的问题。回答要简洁明了，逻辑清晰。")
-
-
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
-    debug = os.getenv("DEBUG", "true").lower() == "true"
+    debug = os.getenv("DEBUG", "false").lower() == "true"
     app.run(debug=debug, host="0.0.0.0", port=port)
